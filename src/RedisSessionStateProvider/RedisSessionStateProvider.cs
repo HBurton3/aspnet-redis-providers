@@ -217,6 +217,7 @@ namespace Microsoft.Web.Redis
                 else
                 {
                     writeLockData = await cache.TryCheckWriteLockAndGetDataAsync(cancellationToken);
+                    lockId = writeLockData.LockId;
                 }
                 bool isLockTaken = writeLockData.IsLockTaken;
                 ISessionStateItemCollection sessionData = writeLockData.Data;
