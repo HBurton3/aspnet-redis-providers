@@ -11,7 +11,7 @@ namespace Microsoft.Web.Redis
 {
     internal static class LogUtility
     {
-        public static TextWriter logger = TextWriter.Null;
+        public static TextWriter Logger { get; set; } = TextWriter.Null;
 
         public static void LogWarning(string msg, params object[] args)
         {
@@ -30,10 +30,10 @@ namespace Microsoft.Web.Redis
 
         private static void Log(string type, string msg, params object[] args)
         {
-            if (logger != null)
+            if (Logger != null)
             {
                 string msgToPrint = (args.Length > 0) ? string.Format(msg, args) : msg;
-                logger.WriteLine("[{0}]{1}{2}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture), type, msgToPrint);
+                Logger.WriteLine("[{0}]{1}{2}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture), type, msgToPrint);
             }
         }
     } 

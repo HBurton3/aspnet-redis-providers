@@ -4,14 +4,16 @@
 //
 
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Web.SessionState;
 
 namespace Microsoft.Web.Redis
 {
     internal interface IRedisClientConnection
     {
-        bool Expiry(string key, int timeInSeconds);
         object Eval(string script, string[] keyArgs, object[] valueArgs);
+        Task<object> EvalAsync(string script, string[] keyArgs, object[] valueArgs, CancellationToken token = default);
         string GetLockId(object rowDataFromRedis);
         int GetSessionTimeout(object rowDataFromRedis);
         bool IsLocked(object rowDataFromRedis);
@@ -19,6 +21,5 @@ namespace Microsoft.Web.Redis
         void Set(string key, byte[] data, DateTime utcExpiry);
         byte[] Get(string key);
         void Remove(string key);
-        byte[] GetOutputCacheDataFromResult(object rowDataFromRedis);
     }
 }

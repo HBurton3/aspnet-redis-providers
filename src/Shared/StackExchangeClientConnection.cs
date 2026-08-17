@@ -6,6 +6,8 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Web.SessionState;
 using StackExchange.Redis;
 
@@ -13,8 +15,8 @@ namespace Microsoft.Web.Redis
 {
     internal class StackExchangeClientConnection : IRedisClientConnection
     {
-        private ProviderConfiguration _configuration;
-        private RedisSharedConnection _sharedConnection;
+        private readonly ProviderConfiguration _configuration;
+        private readonly RedisSharedConnection _sharedConnection;
 
         public StackExchangeClientConnection(ProviderConfiguration configuration, RedisSharedConnection sharedConnection)
         {
@@ -26,13 +28,6 @@ namespace Microsoft.Web.Redis
         public IDatabase RealConnection
         {
             get { return _sharedConnection.Connection; }
-        }
-
-        public bool Expiry(string key, int timeInSeconds)
-        {
-            TimeSpan timeSpan = new TimeSpan(0, 0, timeInSeconds);
-            RedisKey redisKey = key;
-            return (bool)RetryLogic(() => RealConnection.KeyExpire(redisKey, timeSpan));
         }
 
         public object Eval(string script, string[] keyArgs, object[] valueArgs)
@@ -65,6 +60,36 @@ namespace Microsoft.Web.Redis
             return RetryLogic(() => RealConnection.ScriptEvaluate(script, redisKeyArgs, redisValueArgs));
         }
 
+        public async Task<object> EvalAsync(string script, string[] keyArgs, object[] valueArgs, CancellationToken token = default)
+        {
+            RedisKey[] redisKeyArgs = new RedisKey[keyArgs.Length];
+            RedisValue[] redisValueArgs = new RedisValue[valueArgs.Length];
+
+            int i = 0;
+            foreach (string key in keyArgs)
+            {
+                redisKeyArgs[i] = key;
+                i++;
+            }
+
+            i = 0;
+            foreach (object val in valueArgs)
+            {
+                if (val.GetType() == typeof(byte[]))
+                {
+                    // User data is always in bytes
+                    redisValueArgs[i] = (byte[])val;
+                }
+                else
+                {
+                    // Internal data like session timeout and indexes are stored as strings
+                    redisValueArgs[i] = val.ToString();
+                }
+                i++;
+            }
+            return await RetryLogicAsync(() => RealConnection.ScriptEvaluateAsync(script, redisKeyArgs, redisValueArgs), token);
+        }
+
         private object OperationExecutor(Func<object> redisOperation)
         {
             try
@@ -88,6 +113,34 @@ namespace Microsoft.Web.Redis
                 {
                     // Second call should pass if it was script not found issue
                     return redisOperation.Invoke();
+                }
+                throw;
+            }
+        }
+
+        private async Task<RedisResult> OperationExecutorAsync(Func<Task<RedisResult>> redisOperation)
+        {
+            try
+            {
+                return await redisOperation.Invoke();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Try once as this can be caused by force reconnect by closing multiplexer
+                return await redisOperation.Invoke();
+            }
+            catch (RedisConnectionException)
+            {
+                // Try once after reconnect
+                _sharedConnection.ForceReconnect();
+                return await redisOperation.Invoke();
+            }
+            catch (Exception e)
+            {
+                if (e.Message.Contains("NOSCRIPT"))
+                {
+                    // Second call should pass if it was script not found issue
+                    return await redisOperation.Invoke();
                 }
                 throw;
             }
@@ -127,6 +180,44 @@ namespace Microsoft.Web.Redis
                     // First time try after 20 msec after that try after 1 second
                     System.Threading.Thread.Sleep(timeToSleepBeforeRetryInMiliseconds);
                     timeToSleepBeforeRetryInMiliseconds = 1000;
+                }
+            }
+        }
+
+        /// <summary>
+        /// If retry timeout is provided than we will retry first time after 20 ms,
+        /// and after that every 1 sec till retry timeout is expired or we get value.
+        /// </summary>
+        private async Task<RedisResult> RetryLogicAsync(Func<Task<RedisResult>> redisOperation, CancellationToken token = default)
+        {
+            int timeToSleepBeforeRetryInMilliseconds = 20;
+            DateTime startTime = DateTime.Now;
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    return await OperationExecutorAsync(redisOperation);
+                }
+                catch (Exception e)
+                {
+                    TimeSpan passedTime = DateTime.Now - startTime;
+                    if (_configuration.RetryTimeout < passedTime)
+                    {
+                        LogUtility.LogError($"Exception: {e.Message}");
+                        throw;
+                    }
+
+                    int remainingTimeout = (int)(_configuration.RetryTimeout.TotalMilliseconds - passedTime.TotalMilliseconds);
+                    // if remaining time is less than 1 sec than wait only for that much time and than give a last try
+                    if (remainingTimeout < timeToSleepBeforeRetryInMilliseconds)
+                    {
+                        timeToSleepBeforeRetryInMilliseconds = remainingTimeout;
+                    }
+
+                    // First time try after 20 milliseconds after that try after 1 second
+                    await Task.Delay(timeToSleepBeforeRetryInMilliseconds, token);
+                    timeToSleepBeforeRetryInMilliseconds = 1000;
                 }
             }
         }
@@ -217,12 +308,6 @@ namespace Microsoft.Web.Redis
         {
             RedisKey redisKey = key;
             OperationExecutor(() => RealConnection.KeyDelete(redisKey));
-        }
-
-        public byte[] GetOutputCacheDataFromResult(object rowDataFromRedis)
-        {
-            RedisResult rowDataAsRedisResult = (RedisResult)rowDataFromRedis;
-            return (byte[])rowDataAsRedisResult;
         }
     }
 }

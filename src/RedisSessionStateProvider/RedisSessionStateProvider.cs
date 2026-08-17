@@ -23,10 +23,10 @@ namespace Microsoft.Web.Redis
         private const int FROM_MIN_TO_SEC = 60;
 
         internal static ProviderConfiguration configuration;
-        internal static object configurationCreationLock = new object();
+        internal static readonly object configurationCreationLock = new object();
         internal ICacheConnection cache;
 
-        private static object _lastException = new object();
+        private static readonly object _lastException = new object();
 
         /// <summary>
         /// We do not want to throw exception from session state provider because this will break customer application and they can't get chance to handel it.
@@ -69,7 +69,7 @@ namespace Microsoft.Web.Redis
         {
             if (config == null)
             {
-                throw new ArgumentNullException("config");
+                throw new ArgumentNullException(nameof(config));
             }
 
             if (name == null || name.Length == 0)
@@ -132,7 +132,7 @@ namespace Microsoft.Web.Redis
                 if (sessionId != null && sessionLockId != null)
                 {
                     GetAccessToStore(sessionId);
-                    cache.TryReleaseLockIfLockIdMatch(sessionLockId, sessionTimeoutInSeconds);
+                    await cache.TryReleaseLockIfLockIdMatchAsync(sessionLockId, sessionTimeoutInSeconds);
                     LogUtility.LogInfo("EndRequest => Session Id: {0}, Session provider object: {1} => Lock Released with lockId {2}.", sessionId, this.GetHashCode(), sessionLockId);
                     sessionId = null;
                     sessionLockId = null;
@@ -148,7 +148,6 @@ namespace Microsoft.Web.Redis
                     throw;
                 }
             }
-            await Task.FromResult(0);
         }
 
         public override SessionStateStoreData CreateNewStoreData(HttpContextBase context, int timeout)
@@ -166,8 +165,8 @@ namespace Microsoft.Web.Redis
                 ISessionStateItemCollection sessionData = new SessionStateItemCollection();
                 sessionData["SessionStateActions"] = SessionStateActions.InitializeItem;
                 GetAccessToStore(id);
-                // Converting timout from min to sec
-                cache.Set(sessionData, (timeout * FROM_MIN_TO_SEC));
+                // Converting timeout from min to sec
+                await cache.SetAsync(sessionData, (timeout * FROM_MIN_TO_SEC), cancellationToken);
             }
             catch (Exception e)
             {
@@ -178,60 +177,50 @@ namespace Microsoft.Web.Redis
                     throw;
                 }
             }
-            await Task.FromResult(0);
         }
 
         public override async Task<GetItemResult> GetItemAsync(HttpContextBase context, string id, CancellationToken cancellationToken)
         {
             LogUtility.LogInfo("GetItem => Session Id: {0}, Session provider object: {1}.", id, this.GetHashCode());
-            bool locked;
-            TimeSpan lockAge;
-            object lockId;
-            SessionStateActions actions;
-            var sessionData = GetItemFromSessionStore(false, context, id, cancellationToken, out locked, out lockAge, out lockId, out actions);
-            return await Task.FromResult(new GetItemResult(sessionData, locked, lockAge, lockId, actions));
+            return await GetItemFromSessionStore(false, context, id, cancellationToken);
         }
 
         public override async Task<GetItemResult> GetItemExclusiveAsync(HttpContextBase context, string id, CancellationToken cancellationToken)
         {
             LogUtility.LogInfo("GetItemExclusive => Session Id: {0}, Session provider object: {1}.", id, this.GetHashCode());
-            bool locked;
-            TimeSpan lockAge;
-            object lockId;
-            SessionStateActions actions;
-            var sessionData = GetItemFromSessionStore(true, context, id, cancellationToken, out locked, out lockAge, out lockId, out actions);
-            return await Task.FromResult(new GetItemResult(sessionData, locked, lockAge, lockId, actions));
+            return await GetItemFromSessionStore(true, context, id, cancellationToken);
         }
 
-        private SessionStateStoreData GetItemFromSessionStore(bool isWriteLockRequired, HttpContextBase context, string id, CancellationToken cancellationToken, out bool locked, out TimeSpan lockAge, out object lockId, out SessionStateActions actions)
+        private async Task<GetItemResult> GetItemFromSessionStore(bool isWriteLockRequired, HttpContextBase context, string id, CancellationToken cancellationToken)
         {
             try
             {
-                SessionStateStoreData sessionStateStoreData = null;
-                locked = false;
-                lockAge = TimeSpan.Zero;
-                lockId = 0;
-                actions = SessionStateActions.None;
+                bool locked;
+                TimeSpan lockAge = TimeSpan.Zero;
+                object lockId = 0;
+                SessionStateActions actions = SessionStateActions.None;
                 if (id == null)
                 {
-                    return null;
+                    return new GetItemResult(null, false, lockAge, lockId, actions);
                 }
                 GetAccessToStore(id);
-                ISessionStateItemCollection sessionData = null;
 
-                int sessionTimeout;
-                bool isLockTaken = false;
+                WriteLockData writeLockData;
                 //Take read or write lock and if locking successful than get data in sessionData and also update session timeout
                 if (isWriteLockRequired)
                 {
-                    isLockTaken = cache.TryTakeWriteLockAndGetData(DateTime.Now, (int)configuration.RequestTimeout.TotalSeconds, out lockId, out sessionData, out sessionTimeout);
+                    writeLockData = await cache.TryTakeWriteLockAndGetDataAsync(DateTime.Now, (int)configuration.RequestTimeout.TotalSeconds, cancellationToken);
+                    lockId = writeLockData.LockId;
                     sessionId = id; // signal that we have to remove lock in EndRequest
                     sessionLockId = lockId; // save lockId for EndRequest
                 }
                 else
                 {
-                    isLockTaken = cache.TryCheckWriteLockAndGetData(out lockId, out sessionData, out sessionTimeout);
+                    writeLockData = await cache.TryCheckWriteLockAndGetDataAsync(cancellationToken);
                 }
+                bool isLockTaken = writeLockData.IsLockTaken;
+                ISessionStateItemCollection sessionData = writeLockData.Data;
+                int sessionTimeout = writeLockData.SessionTimeout;
 
                 if (isLockTaken)
                 {
@@ -252,15 +241,15 @@ namespace Microsoft.Web.Redis
                 if (locked)
                 {
                     lockAge = cache.GetLockAge(lockId);
-                    return null;
+                    return new GetItemResult(null, true, lockAge, lockId, actions);
                 }
 
                 if (sessionData == null)
                 {
                     // If session data do not exists means it might be exipred and removed. So return null so that asp.net can call CreateUninitializedItem and start again.
                     // But we just locked the record so first release it
-                    ReleaseItemExclusiveAsync(context, id, lockId, cancellationToken).Wait();
-                    return null;
+                    await ReleaseItemExclusiveAsync(context, id, lockId, cancellationToken);
+                    return new GetItemResult(null, false, lockAge, lockId, actions);
                 }
 
                 // Restore action flag from session data
@@ -271,16 +260,12 @@ namespace Microsoft.Web.Redis
 
                 //Get data related to this session from sessionDataDictionary and populate session items
                 sessionData.Dirty = false;
-                sessionStateStoreData = new SessionStateStoreData(sessionData, new HttpStaticObjectsCollection(), sessionTimeout);
-                return sessionStateStoreData;
+                SessionStateStoreData sessionStateStoreData = new SessionStateStoreData(sessionData, new HttpStaticObjectsCollection(), sessionTimeout);
+                return new GetItemResult(sessionStateStoreData, false, lockAge, lockId, actions);
             }
             catch (Exception e)
             {
                 LogUtility.LogError("GetItemFromSessionStore => {0}", e.ToString());
-                locked = false;
-                lockId = null;
-                lockAge = TimeSpan.Zero;
-                actions = 0;
                 LastException = e;
                 if (configuration.ThrowOnError)
                 {
@@ -296,7 +281,7 @@ namespace Microsoft.Web.Redis
             {
                 LogUtility.LogInfo("ResetItemTimeout => Session Id: {0}, Session provider object: {1}.", id, this.GetHashCode());
                 GetAccessToStore(id);
-                cache.UpdateExpiryTime((int)configuration.SessionTimeout.TotalSeconds);
+                await cache.UpdateExpiryTimeAsync((int)configuration.SessionTimeout.TotalSeconds, cancellationToken);
                 cache = null;
             }
             catch (Exception e)
@@ -308,7 +293,6 @@ namespace Microsoft.Web.Redis
                     throw;
                 }
             }
-            await Task.FromResult(0);
         }
 
         public override async Task RemoveItemAsync(HttpContextBase context, string id, object lockId, SessionStateStoreData item, CancellationToken cancellationToken)
@@ -318,7 +302,7 @@ namespace Microsoft.Web.Redis
 
                 LogUtility.LogInfo("RemoveItem => Session Id: {0}, Session provider object: {1}, Lock ID: {2}.", id, this.GetHashCode(), lockId);
                 GetAccessToStore(id);
-                cache.TryRemoveAndReleaseLock(lockId);
+                await cache.TryRemoveAndReleaseLockAsync(lockId, cancellationToken);
             }
             catch (Exception e)
             {
@@ -329,7 +313,6 @@ namespace Microsoft.Web.Redis
                     throw;
                 }
             }
-            await Task.FromResult(0);
         }
 
         public override async Task ReleaseItemExclusiveAsync(HttpContextBase context, string id, object lockId, CancellationToken cancellationToken)
@@ -351,7 +334,7 @@ namespace Microsoft.Web.Redis
                 {
                     LogUtility.LogInfo("ReleaseItemExclusive => Session Id: {0}, Session provider object: {1} => For lockId: {2}.", id, this.GetHashCode(), lockId);
                     GetAccessToStore(id);
-                    cache.TryReleaseLockIfLockIdMatch(lockId, sessionTimeoutInSeconds);
+                    await cache.TryReleaseLockIfLockIdMatchAsync(lockId, sessionTimeoutInSeconds, cancellationToken);
 
                     // Either already released lock successfully inside above if block
                     // Or we do not hold lock so we should not release it.
@@ -368,7 +351,6 @@ namespace Microsoft.Web.Redis
                     throw;
                 }
             }
-            await Task.FromResult(0);
         }
 
         public override async Task SetAndReleaseItemExclusiveAsync(HttpContextBase context, string id, SessionStateStoreData item, object lockId, bool newItem, CancellationToken cancellationToken)
@@ -379,7 +361,7 @@ namespace Microsoft.Web.Redis
                 // If it is new record
                 if (newItem)
                 {
-                    ISessionStateItemCollection sessionItems = null;
+                    ISessionStateItemCollection sessionItems;
                     if (item != null && item.Items != null)
                     {
                         sessionItems = item.Items;
@@ -394,20 +376,20 @@ namespace Microsoft.Web.Redis
                         sessionItems.Remove("SessionStateActions");
                     }
 
-                    // Converting timout from min to sec
-                    cache.Set(sessionItems, (item.Timeout * FROM_MIN_TO_SEC));
+                    // Converting timeout from min to sec
+                    await cache.SetAsync(sessionItems, (item.Timeout * FROM_MIN_TO_SEC), cancellationToken);
                     LogUtility.LogInfo("SetAndReleaseItemExclusive => Session Id: {0}, Session provider object: {1} => created new item in session.", id, this.GetHashCode());
                 } // If update if lock matches
                 else
                 {
-                    if (item != null && item.Items != null)
+                    if (item?.Items != null)
                     {
                         if (item.Items["SessionStateActions"] != null)
                         {
                             item.Items.Remove("SessionStateActions");
                         }
-                        // Converting timout from min to sec
-                        cache.TryUpdateAndReleaseLock(lockId, item.Items, (item.Timeout * FROM_MIN_TO_SEC));
+                        // Converting timeout from min to sec
+                        await cache.TryUpdateAndReleaseLockAsync(lockId, item.Items, (item.Timeout * FROM_MIN_TO_SEC), cancellationToken);
                         LogUtility.LogInfo("SetAndReleaseItemExclusive => Session Id: {0}, Session provider object: {1} => updated item in session, Lock ID: {2}.", id, this.GetHashCode(), lockId);
                     }
                 }
@@ -422,7 +404,6 @@ namespace Microsoft.Web.Redis
                     throw;
                 }
             }
-            await Task.FromResult(0);
         }
     }
 }

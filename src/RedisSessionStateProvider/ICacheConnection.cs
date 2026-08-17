@@ -4,20 +4,38 @@
 //
 
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Web.SessionState;
 
 namespace Microsoft.Web.Redis
 {
+    internal struct WriteLockData
+    {
+        public bool IsLockTaken { get; }
+        public object LockId { get; }
+        public ISessionStateItemCollection Data { get; }
+        public int SessionTimeout { get; }
+
+        public WriteLockData(bool isLockTaken, object lockId, ISessionStateItemCollection data, int sessionTimeout)
+        {
+            IsLockTaken = isLockTaken;
+            LockId = lockId;
+            Data = data;
+            SessionTimeout = sessionTimeout;
+        }
+    }
+
     internal interface ICacheConnection
     {
         KeyGenerator Keys { get; set; }
-        void Set(ISessionStateItemCollection data, int sessionTimeout);
-        void UpdateExpiryTime(int timeToExpireInSeconds);
-        bool TryTakeWriteLockAndGetData(DateTime lockTime, int lockTimeout, out object lockId, out ISessionStateItemCollection data, out int sessionTimeout);
-        bool TryCheckWriteLockAndGetData(out object lockId, out ISessionStateItemCollection data, out int sessionTimeout);
-        void TryReleaseLockIfLockIdMatch(object lockId, int sessionTimeout);
-        void TryRemoveAndReleaseLock(object lockId);
-        void TryUpdateAndReleaseLock(object lockId, ISessionStateItemCollection data, int sessionTimeout);
+        Task SetAsync(ISessionStateItemCollection data, int sessionTimeout, CancellationToken token = default);
+        Task UpdateExpiryTimeAsync(int timeToExpireInSeconds, CancellationToken token = default);
+        Task<WriteLockData> TryTakeWriteLockAndGetDataAsync(DateTime lockTime, int lockTimeout, CancellationToken token = default);
+        Task<WriteLockData> TryCheckWriteLockAndGetDataAsync(CancellationToken token = default);
+        Task TryReleaseLockIfLockIdMatchAsync(object lockId, int sessionTimeout, CancellationToken token = default);
+        Task TryRemoveAndReleaseLockAsync(object lockId, CancellationToken token = default);
+        Task TryUpdateAndReleaseLockAsync(object lockId, ISessionStateItemCollection data, int sessionTimeout, CancellationToken token = default);
         TimeSpan GetLockAge(object lockId);
     }
 }

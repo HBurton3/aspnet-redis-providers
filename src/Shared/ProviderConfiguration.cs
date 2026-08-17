@@ -332,7 +332,7 @@ namespace Microsoft.Web.Redis
                 {
                     throw new MissingMethodException(string.Format(RedisProviderResource.MethodWrongReturnType, LoggingMethodName, LoggingClassName, "System.IO.TextWriter"));
                 }
-                LogUtility.logger = (TextWriter)LoggingMethod.Invoke(null, new object[] { });
+                LogUtility.Logger = (TextWriter)LoggingMethod.Invoke(null, new object[] { });
             }
         }
 

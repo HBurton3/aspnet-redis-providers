@@ -5,6 +5,7 @@
 
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using System.Web.SessionState;
 using Microsoft.Web.Redis.Tests;
 using StackExchange.Redis;
@@ -36,8 +37,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             RedisConnectionWrapper.sharedConnection = null;
         }
 
-        [Fact()]
-        public void Set_ValidData_WithCustomSerializer()
+        [Fact]
+        public async Task Set_ValidData_WithCustomSerializer()
         {
             // this also tests host:port config part
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
@@ -52,7 +53,7 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
                 data["key1"] = "value1";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
                 // Get actual connection and get data blob from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -72,8 +73,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void Set_ValidData()
+        [Fact]
+        public async Task Set_ValidData()
         {
             // this also tests host:port config part
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
@@ -88,7 +89,7 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
                 data["key1"] = "value1";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
                 // Get actual connection and get data blob from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -108,8 +109,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void Set_NullData()
+        [Fact]
+        public async Task Set_NullData()
         {
             // this also tests host:port config part
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
@@ -124,7 +125,7 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
                 data["key1"] = null;
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
                 // Get actual connection and get data blob from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -144,8 +145,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void Set_ExpireData()
+        [Fact]
+        public async Task Set_ExpireData()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -154,7 +155,7 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server that expires after 1 second
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 1);
+                await redisConn.SetAsync(data, 1);
 
                 // Wait for 2 seconds so that data will expire
                 System.Threading.Thread.Sleep(1100);
@@ -169,8 +170,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryTakeWriteLockAndGetData_WithNullData()
+        [Fact]
+        public async Task TryTakeWriteLockAndGetData_WithNullData()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -180,17 +181,15 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = null;
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
                 DateTime lockTime = DateTime.Now;
-                int lockTimeout = 900;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId.ToString());
-                Assert.Single(dataFromRedis);
-                Assert.Null(dataFromRedis["key"]);
+                const int lockTimeout = 900;
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData.LockId);
+                Assert.Single(lockData.Data);
+                Assert.Null(lockData.Data["key"]);
 
                 // Get actual connection and get data lock from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -204,8 +203,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryTakeWriteLockAndGetData_WriteLockWithoutAnyOtherLock()
+        [Fact]
+        public async Task TryTakeWriteLockAndGetData_WriteLockWithoutAnyOtherLock()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -215,21 +214,18 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
                 DateTime lockTime = DateTime.Now;
-                int lockTimeout = 900;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId.ToString());
+                const int lockTimeout = 900;
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData.LockId);
 
-                SessionStateItemCollection dataFromGet = (SessionStateItemCollection)dataFromRedis;
-                Assert.Single(dataFromRedis);
+                Assert.Single(lockData.Data);
 
                 // this will desirialize value
-                Assert.Equal("value", dataFromRedis["key"]);
+                Assert.Equal("value", lockData.Data["key"]);
 
                 // Get actual connection and get data lock from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -243,8 +239,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryTakeWriteLockAndGetData_WriteLockWithOtherWriteLock()
+        [Fact]
+        public async Task TryTakeWriteLockAndGetData_WriteLockWithOtherWriteLock()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -254,26 +250,23 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                int lockTimeout = 900;
+                const int lockTimeout = 900;
 
-                // Takewrite lock successfully first time
-                DateTime lockTime_1 = DateTime.Now;
-                object lockId_1;
-                ISessionStateItemCollection dataFromRedis_1;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime_1, lockTimeout, out lockId_1, out dataFromRedis_1, out sessionTimeout));
-                Assert.Equal(lockTime_1.Ticks.ToString(), lockId_1.ToString());
-                Assert.Single(dataFromRedis_1);
+                // Take write lock successfully first time
+                DateTime lockTime1 = DateTime.Now;
+                WriteLockData lockData1 = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime1, lockTimeout);
+                Assert.True(lockData1.IsLockTaken);
+                Assert.Equal(lockTime1.Ticks.ToString(), lockData1.LockId);
+                Assert.Single(lockData1.Data);
 
                 // try to take write lock and fail and get earlier lock id
-                DateTime lockTime_2 = lockTime_1.AddSeconds(1);
-                object lockId_2;
-                ISessionStateItemCollection dataFromRedis_2;
-                Assert.False(redisConn.TryTakeWriteLockAndGetData(lockTime_2, lockTimeout, out lockId_2, out dataFromRedis_2, out sessionTimeout));
-                Assert.Equal(lockTime_1.Ticks.ToString(), lockId_2.ToString());
-                Assert.Null(dataFromRedis_2);
+                DateTime lockTime2 = lockTime1.AddSeconds(1);
+                WriteLockData lockData2 = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime2, lockTimeout);
+                Assert.False(lockData2.IsLockTaken);
+                Assert.Equal(lockTime1.Ticks.ToString(), lockData2.LockId);
+                Assert.Null(lockData2.Data);
 
                 // Get actual connection
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -284,8 +277,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryTakeWriteLockAndGetData_WriteLockWithOtherWriteLockWithSameLockId()
+        [Fact]
+        public async Task TryTakeWriteLockAndGetData_WriteLockWithOtherWriteLockWithSameLockId()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -295,26 +288,23 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
                 int lockTimeout = 900;
                 // Same LockId
                 DateTime lockTime = DateTime.Now;
 
-                // Takewrite lock successfully first time
-                object lockId_1;
-                ISessionStateItemCollection dataFromRedis_1;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId_1, out dataFromRedis_1, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId_1.ToString());
-                Assert.Single(dataFromRedis_1);
+                // Take write lock successfully first time
+                WriteLockData lockData1 = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData1.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData1.LockId);
+                Assert.Single(lockData1.Data);
 
                 // try to take write lock and fail and get earlier lock id
-                object lockId_2;
-                ISessionStateItemCollection dataFromRedis_2;
-                Assert.False(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId_2, out dataFromRedis_2, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId_2.ToString());
-                Assert.Null(dataFromRedis_2);
+                WriteLockData lockData2 = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.False(lockData2.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData2.LockId);
+                Assert.Null(lockData2.Data);
 
                 // Get actual connection
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -325,8 +315,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryTakeReadLockAndGetData_WithoutAnyLock()
+        [Fact]
+        public async Task TryTakeReadLockAndGetData_WithoutAnyLock()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -336,15 +326,13 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryCheckWriteLockAndGetData(out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Null(lockId);
-                Assert.Single(dataFromRedis);
-                Assert.Equal("value", dataFromRedis["key"]);
+                WriteLockData lockData = await redisConn.TryCheckWriteLockAndGetDataAsync();
+                Assert.True(lockData.IsLockTaken);
+                Assert.Null(lockData.LockId);
+                Assert.Single(lockData.Data);
+                Assert.Equal("value", lockData.Data["key"]);
 
                 // Get actual connection
                 // remove data from redis
@@ -354,8 +342,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryTakeReadLockAndGetData_WithOtherWriteLock()
+        [Fact]
+        public async Task TryTakeReadLockAndGetData_WithOtherWriteLock()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -365,23 +353,20 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                int lockTimeout = 900;
+                const int lockTimeout = 900;
 
-                DateTime lockTime_1 = DateTime.Now;
-                object lockId_1;
-                ISessionStateItemCollection dataFromRedis_1;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime_1, lockTimeout, out lockId_1, out dataFromRedis_1, out sessionTimeout));
-                Assert.Equal(lockTime_1.Ticks.ToString(), lockId_1.ToString());
-                Assert.Single(dataFromRedis_1);
+                DateTime lockTime1 = DateTime.Now;
+                WriteLockData lockData1 = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime1, lockTimeout);
+                Assert.True(lockData1.IsLockTaken);
+                Assert.Equal(lockTime1.Ticks.ToString(), lockData1.LockId);
+                Assert.Single(lockData1.Data);
 
-                object lockId_2;
-                ISessionStateItemCollection dataFromRedis_2;
-                Assert.False(redisConn.TryCheckWriteLockAndGetData(out lockId_2, out dataFromRedis_2, out sessionTimeout));
-                Assert.Equal(lockTime_1.Ticks.ToString(), lockId_2.ToString());
-                Assert.Null(dataFromRedis_2);
+                WriteLockData lockData2 = await redisConn.TryCheckWriteLockAndGetDataAsync();
+                Assert.False(lockData2.IsLockTaken);
+                Assert.Equal(lockTime1.Ticks.ToString(), lockData2.LockId);
+                Assert.Null(lockData2.Data);
 
                 // Get actual connection
                 // remove data and lock from redis
@@ -392,8 +377,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryTakeWriteLockAndGetData_ExpireWriteLock()
+        [Fact]
+        public async Task TryTakeWriteLockAndGetData_ExpireWriteLock()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -403,20 +388,52 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
                 int lockTimeout = 1;
 
                 DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId.ToString());
-                Assert.Single(dataFromRedis);
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData.LockId);
+                Assert.Single(lockData.Data);
 
                 // Wait for 2 seconds so that lock will expire
-                System.Threading.Thread.Sleep(1100);
+                await Task.Delay(1100);
+
+                // Get actual connection and check that lock does not exist
+                IDatabase actualConnection = GetRealRedisConnection(redisConn);
+                string lockValueFromRedis = actualConnection.StringGet(redisConn.Keys.LockKey);
+                Assert.Null(lockValueFromRedis);
+
+                // remove data from redis
+                actualConnection.KeyDelete(redisConn.Keys.DataKey);
+                DisposeRedisConnectionWrapper(redisConn);
+            }
+        }
+
+        [Fact]
+        public async Task TryReleaseLockIfLockIdMatch_ValidWriteLockRelease()
+        {
+            ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
+            using (RedisServer redisServer = new RedisServer())
+            {
+                RedisConnectionWrapper redisConn = GetRedisConnectionWrapperWithUniqueSession();
+
+                // Inserting data into redis server
+                SessionStateItemCollection data = new SessionStateItemCollection();
+                data["key"] = "value";
+                await redisConn.SetAsync(data, 900);
+
+                const int lockTimeout = 900;
+
+                DateTime lockTime = DateTime.Now;
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData.LockId);
+                Assert.Single(lockData.Data);
+
+                await redisConn.TryReleaseLockIfLockIdMatchAsync(lockData.LockId, 900);
 
                 // Get actual connection and check that lock do not exists
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -429,8 +446,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryReleaseLockIfLockIdMatch_ValidWriteLockRelease()
+        [Fact]
+        public async Task TryReleaseLockIfLockIdMatch_InvalidWriteLockRelease()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -440,61 +457,23 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
                 int lockTimeout = 900;
 
                 DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId.ToString());
-                Assert.Single(dataFromRedis);
-
-                redisConn.TryReleaseLockIfLockIdMatch(lockId, 900);
-
-                // Get actual connection and check that lock do not exists
-                IDatabase actualConnection = GetRealRedisConnection(redisConn);
-                string lockValueFromRedis = actualConnection.StringGet(redisConn.Keys.LockKey);
-                Assert.Null(lockValueFromRedis);
-
-                // remove data from redis
-                actualConnection.KeyDelete(redisConn.Keys.DataKey);
-                DisposeRedisConnectionWrapper(redisConn);
-            }
-        }
-
-        [Fact()]
-        public void TryReleaseLockIfLockIdMatch_InvalidWriteLockRelease()
-        {
-            ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
-            using (RedisServer redisServer = new RedisServer())
-            {
-                RedisConnectionWrapper redisConn = GetRedisConnectionWrapperWithUniqueSession();
-
-                // Inserting data into redis server
-                SessionStateItemCollection data = new SessionStateItemCollection();
-                data["key"] = "value";
-                redisConn.Set(data, 900);
-
-                int lockTimeout = 900;
-
-                DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId.ToString());
-                Assert.Single(dataFromRedis);
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData.LockId);
+                Assert.Single(lockData.Data);
 
                 object wrongLockId = lockTime.AddSeconds(1).Ticks.ToString();
-                redisConn.TryReleaseLockIfLockIdMatch(wrongLockId, 900);
+                await redisConn.TryReleaseLockIfLockIdMatchAsync(wrongLockId, 900);
 
                 // Get actual connection and check that lock do not exists
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
                 string lockValueFromRedis = actualConnection.StringGet(redisConn.Keys.LockKey);
-                Assert.Equal(lockId, lockValueFromRedis);
+                Assert.Equal(lockData.LockId, lockValueFromRedis);
 
                 // remove data from redis
                 actualConnection.KeyDelete(redisConn.Keys.DataKey);
@@ -503,8 +482,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryRemoveIfLockIdMatch_ValidLockIdAndRemove()
+        [Fact]
+        public async Task TryRemoveIfLockIdMatch_ValidLockIdAndRemove()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -514,18 +493,16 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                int lockTimeout = 900;
+                const int lockTimeout = 900;
                 DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId.ToString());
-                Assert.Single(dataFromRedis);
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData.LockId);
+                Assert.Single(lockData.Data);
 
-                redisConn.TryRemoveAndReleaseLock(lockId);
+                await redisConn.TryRemoveAndReleaseLockAsync(lockData.LockId);
 
                 // Get actual connection and get data from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -537,8 +514,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryUpdateIfLockIdMatch_WithValidUpdateAndDelete()
+        [Fact]
+        public async Task TryUpdateIfLockIdMatch_WithValidUpdateAndDelete()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -550,15 +527,14 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 data["key1"] = "value1";
                 data["key2"] = "value2";
                 data["key3"] = "value3";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                int lockTimeout = 900;
+                const int lockTimeout = 900;
                 DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId.ToString());
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                ISessionStateItemCollection dataFromRedis = lockData.Data;
+                Assert.True(lockData.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData.LockId);
                 Assert.Equal(3, dataFromRedis.Count);
                 Assert.Equal("value1", dataFromRedis["key1"]);
                 Assert.Equal("value2", dataFromRedis["key2"]);
@@ -566,7 +542,7 @@ namespace Microsoft.Web.Redis.FunctionalTests
 
                 dataFromRedis["key2"] = "value2-updated";
                 dataFromRedis.Remove("key3");
-                redisConn.TryUpdateAndReleaseLock(lockId, dataFromRedis, 900);
+                await redisConn.TryUpdateAndReleaseLockAsync(lockData.LockId, dataFromRedis, 900);
 
                 // Get actual connection and get data from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -586,8 +562,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryUpdateIfLockIdMatch_WithOnlyUpdateAndNoDelete()
+        [Fact]
+        public async Task TryUpdateIfLockIdMatch_WithOnlyUpdateAndNoDelete()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -599,22 +575,21 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 data["key1"] = "value1";
                 data["key2"] = "value2";
                 data["key3"] = "value3";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                int lockTimeout = 900;
+                const int lockTimeout = 900;
                 DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId.ToString());
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData.LockId);
+                ISessionStateItemCollection dataFromRedis = lockData.Data;
                 Assert.Equal(3, dataFromRedis.Count);
                 Assert.Equal("value1", dataFromRedis["key1"]);
                 Assert.Equal("value2", dataFromRedis["key2"]);
                 Assert.Equal("value3", dataFromRedis["key3"]);
 
                 dataFromRedis["key2"] = "value2-updated";
-                redisConn.TryUpdateAndReleaseLock(lockId, dataFromRedis, 900);
+                await redisConn.TryUpdateAndReleaseLockAsync(lockData.LockId, dataFromRedis, 900);
 
                 // Get actual connection and get data from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -635,8 +610,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryUpdateIfLockIdMatch_WithNoUpdateAndOnlyDelete()
+        [Fact]
+        public async Task TryUpdateIfLockIdMatch_WithNoUpdateAndOnlyDelete()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -648,22 +623,21 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 data["key1"] = "value1";
                 data["key2"] = "value2";
                 data["key3"] = "value3";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                int lockTimeout = 900;
+                const int lockTimeout = 900;
                 DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Equal(lockTime.Ticks.ToString(), lockId.ToString());
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData.IsLockTaken);
+                Assert.Equal(lockTime.Ticks.ToString(), lockData.LockId);
+                ISessionStateItemCollection dataFromRedis = lockData.Data;
                 Assert.Equal(3, dataFromRedis.Count);
                 Assert.Equal("value1", dataFromRedis["key1"]);
                 Assert.Equal("value2", dataFromRedis["key2"]);
                 Assert.Equal("value3", dataFromRedis["key3"]);
 
                 dataFromRedis.Remove("key3");
-                redisConn.TryUpdateAndReleaseLock(lockId, dataFromRedis, 900);
+                await redisConn.TryUpdateAndReleaseLockAsync(lockData.LockId, dataFromRedis, 900);
 
                 // Get actual connection and get data from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -683,8 +657,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryUpdateIfLockIdMatch_ExpiryTime_OnValidData()
+        [Fact]
+        public async Task TryUpdateIfLockIdMatch_ExpiryTime_OnValidData()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -695,35 +669,33 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
                 data["key1"] = "value1";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                // Check that data shoud exists
-                int lockTimeout = 90;
+                // Check that data exists
+                const int lockTimeout = 90;
                 DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout);
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                ISessionStateItemCollection dataFromRedis = lockData.Data;
                 Assert.Equal(2, dataFromRedis.Count);
 
-                // Update expiry time to only 1 sec and than verify that.
-                redisConn.TryUpdateAndReleaseLock(lockId, dataFromRedis, 1);
+                // Update expiry time to only 1 sec and then verify that.
+                await redisConn.TryUpdateAndReleaseLockAsync(lockData.LockId, dataFromRedis, 1);
 
                 // Wait for 1.1 seconds so that data will expire
-                System.Threading.Thread.Sleep(1100);
+                await Task.Delay(1100);
 
                 // Get data blob from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
                 HashEntry[] sessionDataFromRedisAfterExpire = actualConnection.HashGetAll(redisConn.Keys.DataKey);
 
-                // Check that data shoud not be there
+                // Check that data is not there
                 Assert.Empty(sessionDataFromRedisAfterExpire);
                 DisposeRedisConnectionWrapper(redisConn);
             }
         }
 
-        [Fact()]
-        public void TryUpdateAndReleaseLockIfLockIdMatch_LargeLockTime_ExpireManuallyTest()
+        [Fact]
+        public async Task TryUpdateAndReleaseLockIfLockIdMatch_LargeLockTime_ExpireManuallyTest()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -733,15 +705,13 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key1"] = "value1";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                int lockTimeout = 120000;
+                const int lockTimeout = 120000;
                 DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryTakeWriteLockAndGetData(lockTime, lockTimeout, out lockId, out dataFromRedis, out sessionTimeout));
-                redisConn.TryUpdateAndReleaseLock(lockId, dataFromRedis, 900);
+                WriteLockData lockData = await redisConn.TryTakeWriteLockAndGetDataAsync(lockTime, lockTimeout);
+                Assert.True(lockData.IsLockTaken);
+                await redisConn.TryUpdateAndReleaseLockAsync(lockData.LockId, lockData.Data, 900);
 
                 // Get actual connection and check that lock is released
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -751,8 +721,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryRemoveIfLockIdMatch_NullLockId()
+        [Fact]
+        public async Task TryRemoveIfLockIdMatch_NullLockId()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -762,16 +732,14 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key"] = "value";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryCheckWriteLockAndGetData(out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Null(lockId);
-                Assert.Single(dataFromRedis);
+                WriteLockData lockData = await redisConn.TryCheckWriteLockAndGetDataAsync();
+                Assert.True(lockData.IsLockTaken);
+                Assert.Null(lockData.LockId);
+                Assert.Single(lockData.Data);
 
-                redisConn.TryRemoveAndReleaseLock(null);
+                await redisConn.TryRemoveAndReleaseLockAsync(null);
 
                 // Get actual connection and get data from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);
@@ -783,8 +751,8 @@ namespace Microsoft.Web.Redis.FunctionalTests
             }
         }
 
-        [Fact()]
-        public void TryUpdateIfLockIdMatch_LockIdNull()
+        [Fact]
+        public async Task TryUpdateIfLockIdMatch_LockIdNull()
         {
             ProviderConfiguration pc = Utility.GetDefaultConfigUtility();
             using (RedisServer redisServer = new RedisServer())
@@ -794,19 +762,17 @@ namespace Microsoft.Web.Redis.FunctionalTests
                 // Inserting data into redis server
                 SessionStateItemCollection data = new SessionStateItemCollection();
                 data["key1"] = "value1";
-                redisConn.Set(data, 900);
+                await redisConn.SetAsync(data, 900);
 
-                DateTime lockTime = DateTime.Now;
-                object lockId;
-                ISessionStateItemCollection dataFromRedis;
-                int sessionTimeout;
-                Assert.True(redisConn.TryCheckWriteLockAndGetData(out lockId, out dataFromRedis, out sessionTimeout));
-                Assert.Null(lockId);
+                WriteLockData lockData = await redisConn.TryCheckWriteLockAndGetDataAsync();
+                ISessionStateItemCollection dataFromRedis = lockData.Data;
+                Assert.True(lockData.IsLockTaken);
+                Assert.Null(lockData.LockId);
                 Assert.Single(dataFromRedis);
 
                 // update session data without lock id (to support lock free session)
                 dataFromRedis["key1"] = "value1-updated";
-                redisConn.TryUpdateAndReleaseLock(null, dataFromRedis, 900);
+                await redisConn.TryUpdateAndReleaseLockAsync(null, dataFromRedis, 900);
 
                 // Get actual connection and get data from redis
                 IDatabase actualConnection = GetRealRedisConnection(redisConn);

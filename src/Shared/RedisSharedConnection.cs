@@ -12,14 +12,14 @@ namespace Microsoft.Web.Redis
 {
     internal class RedisSharedConnection
     {
-        private ProviderConfiguration _configuration;
-        private ConfigurationOptions _configOption;
+        private readonly ProviderConfiguration _configuration;
+        private readonly ConfigurationOptions _configOption;
         private Lazy<ConnectionMultiplexer> _redisMultiplexer;
 
         internal static DateTimeOffset lastReconnectTime = DateTimeOffset.MinValue;
         internal static DateTimeOffset firstErrorTime = DateTimeOffset.MinValue;
         internal static DateTimeOffset previousErrorTime = DateTimeOffset.MinValue;
-        static object reconnectLock = new object();
+        static readonly object reconnectLock = new object();
         internal static TimeSpan ReconnectFrequency = TimeSpan.FromSeconds(60);
         internal static TimeSpan ReconnectErrorThreshold = TimeSpan.FromSeconds(30);
 
@@ -87,17 +87,17 @@ namespace Microsoft.Web.Redis
             var previousReconnect = lastReconnectTime;
             var elapsedSinceLastReconnect = DateTimeOffset.UtcNow - previousReconnect;
 
-            // If mulitple threads call ForceReconnect at the same time, we only want to honor one of them. 
+            // If mulitple threads call ForceReconnect at the same time, we only want to honor one of them.
             if (elapsedSinceLastReconnect > ReconnectFrequency)
             {
                 lock (reconnectLock)
                 {
                     var utcNow = DateTimeOffset.UtcNow;
                     elapsedSinceLastReconnect = utcNow - lastReconnectTime;
-                    
+
                     if (elapsedSinceLastReconnect < ReconnectFrequency)
                     {
-                        return; // Some other thread made it through the check and the lock, so nothing to do. 
+                        return; // Some other thread made it through the check and the lock, so nothing to do.
                     }
 
                     if (firstErrorTime == DateTimeOffset.MinValue)
@@ -131,13 +131,13 @@ namespace Microsoft.Web.Redis
 
         private void CreateMultiplexer()
         {
-            if (LogUtility.logger == null)
+            if (LogUtility.Logger == null)
             {
                 _redisMultiplexer = new Lazy<ConnectionMultiplexer>(() => ConnectionMultiplexer.Connect(_configOption));
             }
             else
             {
-                _redisMultiplexer = new Lazy<ConnectionMultiplexer>(() => ConnectionMultiplexer.Connect(_configOption, LogUtility.logger));
+                _redisMultiplexer = new Lazy<ConnectionMultiplexer>(() => ConnectionMultiplexer.Connect(_configOption, LogUtility.Logger));
             }
             lastReconnectTime = DateTimeOffset.UtcNow;
         }
@@ -152,10 +152,9 @@ namespace Microsoft.Web.Redis
                 }
                 catch (Exception)
                 {
-                    // Example error condition: if accessing old.Value causes a connection attempt and that fails. 
+                    // Example error condition: if accessing old.Value causes a connection attempt and that fails.
                 }
             }
         }
-
     }
 }
